@@ -16,4 +16,9 @@ typedef int64_t i64;
 
 typedef float f32;
 
+// Bool datatype.
+typedef uint8_t bool;
+#define BOOL_TRUE 1
+#define BOOL_FALSE 0
+
 #endif
