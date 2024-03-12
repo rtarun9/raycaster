@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -62,7 +63,7 @@ void draw_rectangle(u32 *frame_buffer, const u32 color, const u16 x, const u16 y
     {
         for (u16 v = 0; v < rect_width; v++)
         {
-            if (v + rect_width < NUMBER_OF_COLUMNS && k + rect_height < NUMBER_OF_ROWS)
+            if (x + v + rect_width < NUMBER_OF_COLUMNS && y + k + rect_height < NUMBER_OF_ROWS)
             {
                 frame_buffer[(y + k) * NUMBER_OF_COLUMNS + v + x] = color;
             }
@@ -73,14 +74,14 @@ void draw_rectangle(u32 *frame_buffer, const u32 color, const u16 x, const u16 y
 int main()
 {
     // Values of player position x and y.
-    const u16 player_x = MAP_NUMBER_OF_COLUMNS / 2;
-    const u16 player_y = MAP_NUMBER_OF_ROWS / 2;
+    // These values are tied to map coordinates, but are floating point.
+    // I.E the range of values for player x and y is (f32)0.0, (f32)map_number_of_rows - 1 and so on.
+    const f32 player_x = 8.0f;
+    const f32 player_y = 8.0f;
 
-    // Rules for the hardcoded game map.
-    // Map width and height must be divisible by NUMBER_OF_COLUMNS and NUMBER_OF_ROWS.
-    // In this map (1D char array), a 1 is a non-walled zone.
-    // 0 entries are walls.
-    // A 1 will imply that visually a MAP_CELL_ENTRY_WIDTH x MAP_CELL_ENTRY_HEIGHT area will be non-walled.
+    // Rules for the hardcoded game map. Map width and height must be divisible by NUMBER_OF_COLUMNS and NUMBER_OF_ROWS.
+    // In this map (1D char array), a 1 is a non-walled zone. 0 entries are walls. A 1 will imply that visually a
+    // MAP_CELL_ENTRY_WIDTH x MAP_CELL_ENTRY_HEIGHT area will be non-walled.
     const u8 game_map[MAP_NUMBER_OF_ROWS * MAP_NUMBER_OF_COLUMNS] = "1000000000000000"
                                                                     "0000000000000000"
                                                                     "0000000000000000"
@@ -129,17 +130,64 @@ int main()
                 draw_rectangle(frame_buffer, 0u, j * MAP_CELL_ENTRY_WIDTH, i * MAP_CELL_ENTRY_HEIGHT,
                                MAP_CELL_ENTRY_WIDTH, MAP_CELL_ENTRY_HEIGHT);
             }
-            else if (j == player_x && i == player_y)
-            {
-                // The player rect is hardcoded to a 2x2 grid.
-                draw_rectangle(frame_buffer, 0xffffffff, j * MAP_CELL_ENTRY_WIDTH, i * MAP_CELL_ENTRY_HEIGHT, 8u, 8u);
-            }
         }
+    }
+
+    // Draw rectangle for player on the framebuffer.
+    const u16 fb_player_x = (u16)((NUMBER_OF_COLUMNS * player_x) / (f32)MAP_NUMBER_OF_COLUMNS);
+    const u16 fb_player_y = (u16)((NUMBER_OF_ROWS * player_y) / (f32)MAP_NUMBER_OF_ROWS);
+
+    draw_rectangle(frame_buffer, 0xffffffff, fb_player_x, fb_player_y, 4u, 4u);
+
+    // player_a : The angle the player is looking at, with respect to the x axis.
+    // Consider the following triangle.
+    // .............
+    //   ...........
+    //      ........
+    //        ......
+    //           ...
+    //             .
+    // In this right angle triangle, say the top left is player_x, player_y.
+    // Now, the angle of top left vertex is player_angle.
+    // The player is looking along the hypotenuse. Say 'c' is length of hypotenuse, and the other sides is 1.
+    // Now, the vector from top left to bottom right, is basically sum of : player_x -> top right vertex vector + the
+    // player_y -> bottom right vector. sin_a = opp / c, so opp (y_component) = sin_a * c .
+    // Similarly, adj (x_component) = cos_a * c
+    // From player_position, with hypotenuse length as c, the vector that goes from position to look at direction is:
+    // (player_x + c * cos_a, player_y + c * sin_a)
+
+    // Draw a line from player position to where it is looking.
+    // 2PI radian = 360 degree
+    // so, X degree in radian is x * (PI / 180)
+    const f32 player_angle = 45.0f * (3.14159 / 180.0f);
+
+    for (u16 c = 8u; c <= 500u; c += 8)
+    {
+        const u16 look_at_x = (u16)(cos(player_angle) * c + fb_player_x);
+        const u16 look_at_y = (u16)(sin(player_angle) * c + fb_player_y);
+
+        // If the 'ray' hits a wall, break out of the loop.
+        // For that, conversion from fb coordinate to map coordinate is required.
+        const u16 map_look_at_x = (MAP_NUMBER_OF_COLUMNS * look_at_x / NUMBER_OF_COLUMNS);
+        const u16 map_look_at_y = (MAP_NUMBER_OF_ROWS * look_at_y / NUMBER_OF_ROWS);
+
+        // NOTE : Check should be for wall, but since walls are majority in current game map, breaking when a non-walled
+        // area is encountered.
+        if (game_map[map_look_at_x + map_look_at_y * MAP_NUMBER_OF_COLUMNS] == '1')
+        {
+            break;
+        }
+
+        draw_rectangle(frame_buffer, 0x00ff0fff, look_at_x, look_at_y, 4u, 4u);
     }
 
     if (write_to_file(frame_buffer) == BOOL_FALSE)
     {
         printf("Failed to write output to PPM file.\n");
+    }
+    else
+    {
+        printf("Succesfully wrote output to PPM file.\n");
     }
 
     free(frame_buffer);
