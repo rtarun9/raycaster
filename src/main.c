@@ -18,6 +18,12 @@
 const u8 MAP_CELL_ENTRY_WIDTH = NUMBER_OF_COLUMNS / MAP_NUMBER_OF_COLUMNS;
 const u8 MAP_CELL_ENTRY_HEIGHT = NUMBER_OF_ROWS / MAP_NUMBER_OF_ROWS;
 
+// Utility function to convert degree to radians.
+f32 degree_to_radians(const f32 degree)
+{
+    return degree * (3.14159 / 180.0f);
+}
+
 // Write contents of framebuffer to a PPM file.
 // Returns BOOL_FALSE if function failed to write to PPM file.
 bool write_to_file(const u32 *frame_buffer)
@@ -83,19 +89,19 @@ int main()
     // In this map (1D char array), a 1 is a non-walled zone. 0 entries are walls. A 1 will imply that visually a
     // MAP_CELL_ENTRY_WIDTH x MAP_CELL_ENTRY_HEIGHT area will be non-walled.
     const u8 game_map[MAP_NUMBER_OF_ROWS * MAP_NUMBER_OF_COLUMNS] = "1000000000000000"
-                                                                    "0000000000000000"
+                                                                    "0011110000000000"
                                                                     "0000000000000000"
                                                                     "0000000000000000"
                                                                     "0000001111100000"
                                                                     "0000001000000000"
                                                                     "0000001000000000"
-                                                                    "0000001000000000"
+                                                                    "0000001000011100"
                                                                     "0001111000000000"
                                                                     "0000000000000000"
                                                                     "0000001111100000"
                                                                     "0000001001100000"
-                                                                    "0000000001100000"
-                                                                    "0000000001100000"
+                                                                    "0000001001100000"
+                                                                    "0000001001100000"
                                                                     "0000000000000000"
                                                                     "0000000000000001";
 
@@ -159,26 +165,35 @@ int main()
     // Draw a line from player position to where it is looking.
     // 2PI radian = 360 degree
     // so, X degree in radian is x * (PI / 180)
-    const f32 player_angle = 45.0f * (3.14159 / 180.0f);
+    const f32 player_angle = degree_to_radians(45.0f);
 
-    for (u16 c = 8u; c <= 500u; c += 8)
+    // FOV (Field of view)
+    // Let the FOV be theta.
+    // Then, we consider that the player can see from -0.5f * theta + player_angle, 0.5f * theta + player_angle.
+    const f32 player_fov = degree_to_radians(45.0f);
+
+    for (f32 angle = -0.5f * player_fov; angle <= 0.5f * player_fov; angle += 0.005)
     {
-        const u16 look_at_x = (u16)(cos(player_angle) * c + fb_player_x);
-        const u16 look_at_y = (u16)(sin(player_angle) * c + fb_player_y);
 
-        // If the 'ray' hits a wall, break out of the loop.
-        // For that, conversion from fb coordinate to map coordinate is required.
-        const u16 map_look_at_x = (MAP_NUMBER_OF_COLUMNS * look_at_x / NUMBER_OF_COLUMNS);
-        const u16 map_look_at_y = (MAP_NUMBER_OF_ROWS * look_at_y / NUMBER_OF_ROWS);
-
-        // NOTE : Check should be for wall, but since walls are majority in current game map, breaking when a non-walled
-        // area is encountered.
-        if (game_map[map_look_at_x + map_look_at_y * MAP_NUMBER_OF_COLUMNS] == '1')
+        for (u16 c = 8u; c <= 500u; c += 8)
         {
-            break;
-        }
+            const u16 look_at_x = (u16)(cos(player_angle + angle) * c + fb_player_x);
+            const u16 look_at_y = (u16)(sin(player_angle + angle) * c + fb_player_y);
 
-        draw_rectangle(frame_buffer, 0x00ff0fff, look_at_x, look_at_y, 4u, 4u);
+            // If the 'ray' hits a wall, break out of the loop.
+            // For that, conversion from fb coordinate to map coordinate is required.
+            const u16 map_look_at_x = (MAP_NUMBER_OF_COLUMNS * look_at_x / NUMBER_OF_COLUMNS);
+            const u16 map_look_at_y = (MAP_NUMBER_OF_ROWS * look_at_y / NUMBER_OF_ROWS);
+
+            // NOTE : Check should be for wall, but since walls are majority in current game map, breaking when a
+            // non-walled area is encountered.
+            if (game_map[map_look_at_x + map_look_at_y * MAP_NUMBER_OF_COLUMNS] == '1')
+            {
+                break;
+            }
+
+            draw_rectangle(frame_buffer, 0x00ff0fff, look_at_x, look_at_y, 4u, 4u);
+        }
     }
 
     if (write_to_file(frame_buffer) == BOOL_FALSE)
