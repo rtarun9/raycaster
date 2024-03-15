@@ -92,14 +92,17 @@ int main()
            IMAGE_NUMBER_OF_ROWS, IMAGE_NUMBER_OF_COLUMNS, FB_NUMBER_OF_ROWS, FB_NUMBER_OF_COLUMNS, MAP_NUMBER_OF_ROWS,
            MAP_NUMBER_OF_COLUMNS);
 
+    // Color map (For walls).
+    const u32 color_map[9] = {0x00000000, 0xffffffff, 0x00ff0000, 0x00f00000, 0x000f0000,
+                              0x0000f000, 0x00000f00, 0x000000f0, 0x0000000f};
     // Values of player position x and y.
     // These values are tied to map coordinates.
     // I.E the range of values for player x and y is 0, map_number_of_rows - 1 and so on.
-    const u16 player_x = 4u;
+    const u16 player_x = 6u;
     const u16 player_y = 2u;
 
     // player_angle is the angle (with respect to the x axis) that the player is looking at.
-    const f32 player_angle = degree_to_radians(90.0f);
+    const f32 player_angle = degree_to_radians(180.0f);
 
     // FOV (Field of view)
     // Let the FOV be theta.
@@ -107,13 +110,14 @@ int main()
     const f32 player_fov = degree_to_radians(45.0f);
 
     // Rules for the hardcoded game map. Map width and height must be divisible by NUMBER_OF_COLUMNS and NUMBER_OF_ROWS.
-    // In this map (1D char array), a 0 is a walled zone. Empty entries are non-walls. 0 will imply that visually a
-    // MAP_CELL_ENTRY_WIDTH x MAP_CELL_ENTRY_HEIGHT area will be non-walled.
-    const u8 game_map[MAP_NUMBER_OF_ROWS * MAP_NUMBER_OF_COLUMNS] = "0000000000000000"
-                                                                    "0              0"
-                                                                    "0      00000   0"
-                                                                    "0     0        0"
-                                                                    "0     0   000000"
+    // In this map (1D char array), a number is a walled zone (the number is a index into color map). Empty entries are
+    // non-walls. Number will imply that visually a MAP_CELL_ENTRY_WIDTH x MAP_CELL_ENTRY_HEIGHT area will be
+    // non-walled.
+    const u8 game_map[MAP_NUMBER_OF_ROWS * MAP_NUMBER_OF_COLUMNS] = "0010000000000000"
+                                                                    "1              0"
+                                                                    "8      04000   0"
+                                                                    "3     0        0"
+                                                                    "3     0   000000"
                                                                     "0   00000      0"
                                                                     "0   0   0      0"
                                                                     "0   0   00000  0"
@@ -145,10 +149,11 @@ int main()
         {
             // If entry [i][j] of game_map is a 0, write black from i * MAP_CELL_ENTRY_WIDTH to i * MAP_CELL_ENTRY_WIDTH
             // + 1 (and similarly for the height).
-            if (game_map[i * MAP_NUMBER_OF_COLUMNS + j] == '0')
+            const u8 game_map_value = game_map[i * MAP_NUMBER_OF_COLUMNS + j];
+            if (game_map_value != ' ')
             {
-                draw_rectangle(frame_buffer, 0u, j * MAP_CELL_ENTRY_WIDTH, i * MAP_CELL_ENTRY_HEIGHT,
-                               MAP_CELL_ENTRY_WIDTH, MAP_CELL_ENTRY_HEIGHT);
+                draw_rectangle(frame_buffer, color_map[game_map_value - '0'], j * MAP_CELL_ENTRY_WIDTH,
+                               i * MAP_CELL_ENTRY_HEIGHT, MAP_CELL_ENTRY_WIDTH, MAP_CELL_ENTRY_HEIGHT);
             }
         }
     }
@@ -184,7 +189,9 @@ int main()
     for (f32 angle = -0.5f * player_fov; angle <= 0.5f * player_fov; angle += angle_increment_to_cast_512_rays)
     {
         u16 distance = 0xffff;
-        for (u16 c = 1u; c < IMAGE_NUMBER_OF_ROWS; c += 3)
+        u32 color = 0u;
+
+        for (u16 c = 1u; c < IMAGE_NUMBER_OF_ROWS; c += 1)
         {
             const u16 look_at_x = (u16)(cos(player_angle + angle) * c + image_player_x);
             const u16 look_at_y = (u16)(sin(player_angle + angle) * c + image_player_y);
@@ -194,10 +201,12 @@ int main()
             const u16 map_look_at_x = (MAP_NUMBER_OF_COLUMNS * look_at_x / IMAGE_NUMBER_OF_COLUMNS);
             const u16 map_look_at_y = (MAP_NUMBER_OF_ROWS * look_at_y / IMAGE_NUMBER_OF_ROWS);
 
-            if (map_look_at_x < MAP_NUMBER_OF_COLUMNS && map_look_at_y < MAP_NUMBER_OF_ROWS &&
-                game_map[map_look_at_x + map_look_at_y * MAP_NUMBER_OF_COLUMNS] == '0')
+            const u8 game_map_value = game_map[map_look_at_x + map_look_at_y * MAP_NUMBER_OF_COLUMNS];
+            if (map_look_at_x < MAP_NUMBER_OF_COLUMNS && map_look_at_y < MAP_NUMBER_OF_ROWS && game_map_value != ' ')
             {
-                distance = (u16)(IMAGE_NUMBER_OF_ROWS - c);
+                // The distance / 2 is to make sure the walls close to player are not *TOO* big.
+                distance = (u16)(IMAGE_NUMBER_OF_ROWS - c) / 2;
+                color = color_map[game_map_value - '0'];
                 break;
             }
 
@@ -208,7 +217,6 @@ int main()
             }
         }
 
-        printf("dist :: %u\n", distance);
         // Process to create 3D image.
         // Start with the center (vertically) of 3D image.
         // Each of 512 casted rays represent one pixel of 3D image horizontally.
@@ -217,7 +225,7 @@ int main()
         for (i16 h = -distance / 2; h < distance / 2; h += 1)
         {
             frame_buffer[((IMAGE_NUMBER_OF_ROWS / 2) + h) * FB_NUMBER_OF_COLUMNS + ray_number +
-                         IMAGE_NUMBER_OF_COLUMNS] = 0x00aabbcc;
+                         IMAGE_NUMBER_OF_COLUMNS] = color;
         }
 
         ray_number++;
