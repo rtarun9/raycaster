@@ -1,4 +1,3 @@
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -42,12 +41,7 @@ void draw_rectangle(u32 *frame_buffer, const u32 color, const u16 x, const u16 y
     {
         for (u16 v = 0; v < rect_width; v++)
         {
-            // Note the horizontal check is done against IMAGE_NUMBER_OF_COLUMNS (so we only draw on left half of FB),
-            // But when writing to FB we use FB_NUMBER_OF_COLUMNS to index to FB (to prevent writing to right 3D image).
-            if (x + v < IMAGE_NUMBER_OF_COLUMNS && y + k < IMAGE_NUMBER_OF_ROWS)
-            {
-                frame_buffer[(y + k) * FB_NUMBER_OF_COLUMNS + v + x] = color;
-            }
+            frame_buffer[(y + k) * FB_NUMBER_OF_COLUMNS + v + x] = color;
         }
     }
 }
@@ -82,9 +76,13 @@ int main()
     const HWND window_handle =
         CreateWindowExA(0, window_class_name, "Raycaster", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                         window_rect.right, window_rect.bottom, NULL, NULL, GetModuleHandle(NULL), NULL);
-    if (!window_handle)
+    if (window_handle)
     {
-        printf("Failed to create win32 window.");
+        printf("Created win32 window.\n");
+    }
+    else
+    {
+        printf("Failed to create win32 window.\n");
         return 0;
     }
 
@@ -93,15 +91,72 @@ int main()
     // Do note that for efficiency purposes the SAME framebuffer will also contain the 3D image on the right of the 2D
     // raycasting & game map image.
     u32 *frame_buffer = (u32 *)malloc(sizeof(u32) * FB_NUMBER_OF_COLUMNS * FB_NUMBER_OF_ROWS);
+    u32 *frame_buffer_with_game_map = (u32 *)malloc(sizeof(u32) * FB_NUMBER_OF_COLUMNS * FB_NUMBER_OF_ROWS);
 
     ShowWindow(window_handle, SW_SHOW);
 
+    // As the game map is static for now, it might be more efficient to draw the game map to framebuffer initially, and
+    // do a memcpy of framebuffer at the start of each frame. Rules for the hardcoded game map. Map width and height
+    // must be divisible by NUMBER_OF_COLUMNS and NUMBER_OF_ROWS. In this map (1D char array), a number is a walled zone
+    // (the number is a index into color
+    // map). Empty entries are non-walls. Number will imply that visually a MAP_CELL_ENTRY_WIDTH x
+    // MAP_CELL_ENTRY_HEIGHT area will be non-walled.
+    const u8 game_map[MAP_NUMBER_OF_ROWS * MAP_NUMBER_OF_COLUMNS + 1] = "0010000000000000"
+                                                                        "1              1"
+                                                                        "8      04000   0"
+                                                                        "3     0        0"
+                                                                        "3     0   000000"
+                                                                        "0   00000      0"
+                                                                        "0   0   0      0"
+                                                                        "0   0   00000  0"
+                                                                        "0   0   0      0"
+                                                                        "0       0   0000"
+                                                                        "0       0      0"
+                                                                        "0       0      0"
+                                                                        "0  000000      0"
+                                                                        "0              0"
+                                                                        "0              0"
+                                                                        "0000000000000000";
+
+    // Color map (For walls).
+    const u32 color_map[9] = {0x00000000, 0xffffffff, 0x00ff0000, 0x00f00000, 0x000f0000,
+                              0x0000f000, 0x00000f00, 0x000000f0, 0x0000000f};
+    // Set a background color for entire FB.
+    for (u32 i = 0; i < FB_NUMBER_OF_ROWS * FB_NUMBER_OF_COLUMNS; i++)
+    {
+        frame_buffer_with_game_map[i] = 0x000099cc;
+    }
+
+    // Create the game map.
+    for (u16 i = 0; i < MAP_NUMBER_OF_ROWS; i++)
+    {
+        for (u16 j = 0; j < MAP_NUMBER_OF_COLUMNS; j++)
+        {
+            // If entry [i][j] of game_map is a 0, write black from i * MAP_CELL_ENTRY_WIDTH to i *
+            // MAP_CELL_ENTRY_WIDTH
+            // + 1 (and similarly for the height).
+            const u8 game_map_value = game_map[i * MAP_NUMBER_OF_COLUMNS + j];
+            if (game_map_value != ' ')
+            {
+                draw_rectangle(frame_buffer_with_game_map, color_map[game_map_value - '0'], j * MAP_CELL_ENTRY_WIDTH,
+                               i * MAP_CELL_ENTRY_HEIGHT, MAP_CELL_ENTRY_WIDTH, MAP_CELL_ENTRY_HEIGHT);
+            }
+        }
+    }
+
+    // Player angle in degrees will be changed in each frame.
     f32 player_angle_in_degrees = 0.0f;
+
+    // FOV (Field of view)
+    // Let the FOV be theta.
+    // Then, we consider that the player can see from -0.5f * theta + player_angle, 0.5f * theta + player_angle.
+    const f32 player_fov = degree_to_radians(45.0f);
 
     bool close_window = BOOL_FALSE;
     while (close_window != BOOL_TRUE)
     {
         printf("Begin of frame.\n");
+        memcpy(frame_buffer, frame_buffer_with_game_map, sizeof(u32) * FB_NUMBER_OF_ROWS * FB_NUMBER_OF_COLUMNS);
 
         MSG message = {};
         if (GetMessageA(&message, NULL, 0, 0))
@@ -115,9 +170,11 @@ int main()
             close_window = BOOL_TRUE;
         }
 
-        // Color map (For walls).
-        const u32 color_map[9] = {0x00000000, 0xffffffff, 0x00ff0000, 0x00f00000, 0x000f0000,
-                                  0x0000f000, 0x00000f00, 0x000000f0, 0x0000000f};
+        LARGE_INTEGER frame_start_time = {};
+        LARGE_INTEGER frame_end_time = {};
+
+        QueryPerformanceCounter(&frame_start_time);
+
         // Values of player position x and y.
         // These values are tied to map coordinates.
         // I.E the range of values for player x and y is 0, map_number_of_rows - 1 and so on.
@@ -126,55 +183,6 @@ int main()
 
         // player_angle is the angle (with respect to the x axis) that the player is looking at.
         const f32 player_angle = degree_to_radians(player_angle_in_degrees);
-
-        // FOV (Field of view)
-        // Let the FOV be theta.
-        // Then, we consider that the player can see from -0.5f * theta + player_angle, 0.5f * theta + player_angle.
-        const f32 player_fov = degree_to_radians(45.0f);
-
-        // Rules for the hardcoded game map. Map width and height must be divisible by NUMBER_OF_COLUMNS and
-        // NUMBER_OF_ROWS. In this map (1D char array), a number is a walled zone (the number is a index into color
-        // map). Empty entries are non-walls. Number will imply that visually a MAP_CELL_ENTRY_WIDTH x
-        // MAP_CELL_ENTRY_HEIGHT area will be non-walled.
-        const u8 game_map[MAP_NUMBER_OF_ROWS * MAP_NUMBER_OF_COLUMNS + 1] = "0010000000000000"
-                                                                            "1              1"
-                                                                            "8      04000   0"
-                                                                            "3     0        0"
-                                                                            "3     0   000000"
-                                                                            "0   00000      0"
-                                                                            "0   0   0      0"
-                                                                            "0   0   00000  0"
-                                                                            "0   0   0      0"
-                                                                            "0       0   0000"
-                                                                            "0       0      0"
-                                                                            "0       0      0"
-                                                                            "0  000000      0"
-                                                                            "0              0"
-                                                                            "0              0"
-                                                                            "0000000000000000";
-
-        // Set a background color for entire FB.
-        for (u32 i = 0; i < FB_NUMBER_OF_ROWS * FB_NUMBER_OF_COLUMNS; i++)
-        {
-            frame_buffer[i] = 0x000099cc;
-        }
-
-        // Create the game map.
-        for (u16 i = 0; i < MAP_NUMBER_OF_ROWS; i++)
-        {
-            for (u16 j = 0; j < MAP_NUMBER_OF_COLUMNS; j++)
-            {
-                // If entry [i][j] of game_map is a 0, write black from i * MAP_CELL_ENTRY_WIDTH to i *
-                // MAP_CELL_ENTRY_WIDTH
-                // + 1 (and similarly for the height).
-                const u8 game_map_value = game_map[i * MAP_NUMBER_OF_COLUMNS + j];
-                if (game_map_value != ' ')
-                {
-                    draw_rectangle(frame_buffer, color_map[game_map_value - '0'], j * MAP_CELL_ENTRY_WIDTH,
-                                   i * MAP_CELL_ENTRY_HEIGHT, MAP_CELL_ENTRY_WIDTH, MAP_CELL_ENTRY_HEIGHT);
-                }
-            }
-        }
 
         // player_a : The angle the player is looking at, with respect to the x axis.
         // Consider the following triangle.
@@ -228,11 +236,7 @@ int main()
                     break;
                 }
 
-                // for debugging the ray cast (in dotted fashion).
-                if (c & 1)
-                {
-                    draw_rectangle(frame_buffer, 0x00ff0fff, look_at_x, look_at_y, 4u, 4u);
-                }
+                draw_rectangle(frame_buffer, 0x00ff0fff, look_at_x, look_at_y, 4u, 4u);
             }
 
             // Process to create 3D image.
@@ -254,6 +258,10 @@ int main()
         draw_rectangle(frame_buffer, 0xffffffff, player_x * MAP_CELL_ENTRY_WIDTH, player_y * MAP_CELL_ENTRY_HEIGHT, 4u,
                        4u);
 
+        QueryPerformanceCounter(&frame_end_time);
+
+        printf("Elapsed number of ticks :: %lld\n", frame_end_time.QuadPart - frame_start_time.QuadPart);
+
         const HDC window_device_context = GetDC(window_handle);
         for (u16 i = 0; i < FB_NUMBER_OF_ROWS; i++)
         {
@@ -270,6 +278,7 @@ int main()
     }
 
     free(frame_buffer);
+    free(frame_buffer_with_game_map);
 
     return 0;
 }
