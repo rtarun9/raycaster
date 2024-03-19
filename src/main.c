@@ -125,11 +125,11 @@ int main()
                                                                         "3     0        0"
                                                                         "3     0   000000"
                                                                         "0   00000      0"
-                                                                        "0   0   0      3"
-                                                                        "0   0   00000  0"
+                                                                        "0   0   7      3"
+                                                                        "0   9   00000  0"
                                                                         "0   0   0      0"
-                                                                        "1       0   0000"
-                                                                        "0       0      0"
+                                                                        "1       1   0000"
+                                                                        "0       2      0"
                                                                         "0       0      0"
                                                                         "0  050000      5"
                                                                         "0              0"
@@ -226,7 +226,7 @@ int main()
 
         for (f32 angle = -0.5f * player_fov; angle <= 0.5f * player_fov; angle += angle_increment_to_cast_512_rays)
         {
-            u16 distance = 0xffff;
+            f32 distance = 0.0f;
             u32 color = 0u;
 
             for (u16 c = 1u; c < IMAGE_NUMBER_OF_ROWS; c += 1)
@@ -243,8 +243,12 @@ int main()
                 if (map_look_at_x < MAP_NUMBER_OF_COLUMNS && map_look_at_y < MAP_NUMBER_OF_ROWS &&
                     game_map_value != ' ')
                 {
-                    // The distance / 2 is to make sure the walls close to player are not *TOO* big.
-                    distance = (u16)(IMAGE_NUMBER_OF_ROWS - c) / 2;
+                    distance = (IMAGE_NUMBER_OF_ROWS /
+                                (sqrt(pow(cos(player_angle + angle) * c, 2) + pow(sin(player_angle + angle) * c, 2)) *
+                                     cos(angle) +
+                                 0.0001f)) *
+                               MAP_NUMBER_OF_ROWS;
+                    distance = distance > IMAGE_NUMBER_OF_ROWS ? MAP_NUMBER_OF_ROWS : distance;
                     color = color_map[game_map_value - '0'];
                     break;
                 }
