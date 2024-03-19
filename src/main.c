@@ -7,6 +7,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+// Ref for win32 bit map: https://github.com/northern/Win32Bitmaps
+
 // Dimensions of the OVERALL framebuffer.
 // Note that this includes dimension for both game map and the 3D image (which will be on the right side of game map).
 #define FB_NUMBER_OF_COLUMNS 1024
@@ -45,6 +47,13 @@ void draw_rectangle(u32 *frame_buffer, const u32 color, const u16 x, const u16 y
         }
     }
 }
+
+// Global variables to make input handling easier.
+// 1 -> right / down, -1 -> left / up, 0 -> none.
+static i8 g_move_x = 0;
+static i8 g_move_y = 0;
+
+static i16 g_player_angle = 0;
 
 int main()
 {
@@ -86,6 +95,15 @@ int main()
         return 0;
     }
 
+    // Create bitmap.
+    BITMAPINFO bitmap_info = {};
+    bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmap_info.bmiHeader.biWidth = FB_NUMBER_OF_COLUMNS;
+    bitmap_info.bmiHeader.biHeight = -FB_NUMBER_OF_ROWS; // The height is flipped to (0, 0) is in top left.
+    bitmap_info.bmiHeader.biPlanes = 1;
+    bitmap_info.bmiHeader.biBitCount = 32;
+    bitmap_info.bmiHeader.biCompression = BI_RGB;
+
     // Framebuffer is just a large flattened 1D array.
     // bits 31:26 will be ignored. The other bits will be red (8bits), green  (8bits), blue (8bits).
     // Do note that for efficiency purposes the SAME framebuffer will also contain the 3D image on the right of the 2D
@@ -101,19 +119,19 @@ int main()
     // (the number is a index into color
     // map). Empty entries are non-walls. Number will imply that visually a MAP_CELL_ENTRY_WIDTH x
     // MAP_CELL_ENTRY_HEIGHT area will be non-walled.
-    const u8 game_map[MAP_NUMBER_OF_ROWS * MAP_NUMBER_OF_COLUMNS + 1] = "0010000000000000"
+    const u8 game_map[MAP_NUMBER_OF_ROWS * MAP_NUMBER_OF_COLUMNS + 1] = "0010000030020000"
                                                                         "1              1"
                                                                         "8      04000   0"
                                                                         "3     0        0"
                                                                         "3     0   000000"
                                                                         "0   00000      0"
-                                                                        "0   0   0      0"
+                                                                        "0   0   0      3"
                                                                         "0   0   00000  0"
                                                                         "0   0   0      0"
-                                                                        "0       0   0000"
+                                                                        "1       0   0000"
                                                                         "0       0      0"
                                                                         "0       0      0"
-                                                                        "0  000000      0"
+                                                                        "0  050000      5"
                                                                         "0              0"
                                                                         "0              0"
                                                                         "0000000000000000";
@@ -144,13 +162,15 @@ int main()
         }
     }
 
-    // Player angle in degrees will be changed in each frame.
-    f32 player_angle_in_degrees = 0.0f;
-
     // FOV (Field of view)
     // Let the FOV be theta.
     // Then, we consider that the player can see from -0.5f * theta + player_angle, 0.5f * theta + player_angle.
     const f32 player_fov = degree_to_radians(45.0f);
+
+    // Values of player position x and y.
+    // These values are tied to image coordinates.
+    u16 player_x = IMAGE_NUMBER_OF_COLUMNS / 4;
+    u16 player_y = IMAGE_NUMBER_OF_ROWS / 4;
 
     bool close_window = BOOL_FALSE;
     while (close_window != BOOL_TRUE)
@@ -159,7 +179,7 @@ int main()
         memcpy(frame_buffer, frame_buffer_with_game_map, sizeof(u32) * FB_NUMBER_OF_ROWS * FB_NUMBER_OF_COLUMNS);
 
         MSG message = {};
-        if (GetMessageA(&message, NULL, 0, 0))
+        if (PeekMessageA(&message, NULL, 0, 0, PM_REMOVE))
         {
             TranslateMessage(&message);
             DispatchMessageA(&message);
@@ -175,14 +195,11 @@ int main()
 
         QueryPerformanceCounter(&frame_start_time);
 
-        // Values of player position x and y.
-        // These values are tied to map coordinates.
-        // I.E the range of values for player x and y is 0, map_number_of_rows - 1 and so on.
-        const u16 player_x = 6u;
-        const u16 player_y = 2u;
+        player_x = (player_x + g_move_x) % IMAGE_NUMBER_OF_COLUMNS;
+        player_y = (player_y + g_move_y) % IMAGE_NUMBER_OF_ROWS;
 
         // player_angle is the angle (with respect to the x axis) that the player is looking at.
-        const f32 player_angle = degree_to_radians(player_angle_in_degrees);
+        const f32 player_angle = degree_to_radians(g_player_angle);
 
         // player_a : The angle the player is looking at, with respect to the x axis.
         // Consider the following triangle.
@@ -207,10 +224,6 @@ int main()
         const f32 angle_increment_to_cast_512_rays = player_fov / 512.0f;
         u16 ray_number = 0u;
 
-        // player coordinates that are tied to image (player_x/y is tied to the map).
-        const u16 image_player_x = (player_x * IMAGE_NUMBER_OF_COLUMNS / MAP_NUMBER_OF_COLUMNS);
-        const u16 image_player_y = (player_y * IMAGE_NUMBER_OF_ROWS / MAP_NUMBER_OF_ROWS);
-
         for (f32 angle = -0.5f * player_fov; angle <= 0.5f * player_fov; angle += angle_increment_to_cast_512_rays)
         {
             u16 distance = 0xffff;
@@ -218,8 +231,8 @@ int main()
 
             for (u16 c = 1u; c < IMAGE_NUMBER_OF_ROWS; c += 1)
             {
-                const u16 look_at_x = (u16)(cos(player_angle + angle) * c + image_player_x);
-                const u16 look_at_y = (u16)(sin(player_angle + angle) * c + image_player_y);
+                const u16 look_at_x = (u16)(cos(player_angle + angle) * c + player_x);
+                const u16 look_at_y = (u16)(sin(player_angle + angle) * c + player_y);
 
                 // If the 'ray' hits a wall, break out of the loop.
                 // For that, conversion from fb coordinate to map coordinate is required.
@@ -255,26 +268,22 @@ int main()
 
         // Draw rectangle for player on the image (not the MAP).
         // This is done at the last so debug raycast do not cover player viz.
-        draw_rectangle(frame_buffer, 0xffffffff, player_x * MAP_CELL_ENTRY_WIDTH, player_y * MAP_CELL_ENTRY_HEIGHT, 4u,
-                       4u);
+        draw_rectangle(frame_buffer, 0xffffffff, player_x, player_y, 4u, 4u);
 
         QueryPerformanceCounter(&frame_end_time);
 
         printf("Elapsed number of ticks :: %lld\n", frame_end_time.QuadPart - frame_start_time.QuadPart);
 
         const HDC window_device_context = GetDC(window_handle);
-        for (u16 i = 0; i < FB_NUMBER_OF_ROWS; i++)
-        {
-            for (u16 j = 0; j < FB_NUMBER_OF_COLUMNS; j++)
-            {
-                const u32 pixel_value = frame_buffer[i * FB_NUMBER_OF_COLUMNS + j];
-                SetPixel(window_device_context, j, i,
-                         RGB(pixel_value >> 16 & 0xff, pixel_value >> 8 & 0xff, pixel_value & 0xff));
-            }
-        }
 
-        player_angle_in_degrees += 15.0f;
+        // Render to window.
+        SetDIBitsToDevice(window_device_context, 0, 0, FB_NUMBER_OF_COLUMNS, FB_NUMBER_OF_ROWS, 0, 0, 0,
+                          FB_NUMBER_OF_ROWS, (BYTE *)frame_buffer, &bitmap_info, DIB_RGB_COLORS);
+
         printf("End of frame.\n");
+
+        g_move_x = 0;
+        g_move_y = 0;
     }
 
     free(frame_buffer);
@@ -288,6 +297,33 @@ LRESULT CALLBACK window_proc(HWND window_handle, UINT message, WPARAM wparam, LP
     switch (message)
     {
     case WM_KEYDOWN:
+        if (wparam == 0x57) // W
+        {
+            g_move_y = -1;
+        }
+        else if (wparam == 0x53) // S
+        {
+            g_move_y = 1;
+        }
+
+        if (wparam == 0x41) // A
+        {
+            g_move_x = -1;
+        }
+        else if (wparam == 0x44) // D
+        {
+            g_move_x = 1;
+        }
+
+        if (wparam == VK_LEFT)
+        {
+            g_player_angle -= 2;
+        }
+        else if (wparam == VK_RIGHT)
+        {
+            g_player_angle += 2;
+        }
+
         if (wparam == VK_ESCAPE)
         {
             PostQuitMessage(0);
