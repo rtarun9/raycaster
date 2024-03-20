@@ -2,7 +2,11 @@
 #include <stdlib.h>
 
 #include "../include/math_utils.h"
+#include "../include/texture.h"
 #include "../include/type.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "../extern/stb_image.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -44,6 +48,34 @@ void draw_rectangle(u32 *frame_buffer, const u32 color, const u16 x, const u16 y
         for (u16 v = 0; v < rect_width; v++)
         {
             frame_buffer[(y + k) * FB_NUMBER_OF_COLUMNS + v + x] = color;
+        }
+    }
+}
+
+// A similar function as previous, but takes wall texture and wall index as parameter.
+// The texture has many individual texture placed side by side, and texture index determines which individual texture is
+// being used. See assets/wall_texture.png to see example of texture to be called from this function.
+// NOTE : texture_width and height correspond to the entire texture, not for individual texture.
+void draw_rectangle_with_texture_sheet(u32 *frame_buffer, struct TextureSheet *texture_sheet, const u8 texture_index,
+                                       const u16 x, const u16 y, const u16 rect_width, const u16 rect_height)
+{
+    // The final mul with texture_sheet->height keeps in mind that width and height of individual textures = height of
+    // texture sheet.
+    const u16 texture_width_offset = texture_index * texture_sheet->height;
+    printf("Offset :: %u\n", texture_width_offset);
+
+    for (u16 k = 0; k < rect_height; k++)
+    {
+        for (u16 v = 0; v < rect_width; v++)
+        {
+            // In pixel format, R G B components are placed in that order.
+            const u8 *texture_red_component_address =
+                &texture_sheet
+                     ->texture[(texture_width_offset + v + texture_sheet->width * k) * texture_sheet->num_components];
+
+            frame_buffer[(y + k) * FB_NUMBER_OF_COLUMNS + v + x] = *(texture_red_component_address) << 16 |
+                                                                   *(texture_red_component_address + 1) << 8 |
+                                                                   *(texture_red_component_address + 2);
         }
     }
 }
@@ -112,7 +144,8 @@ int main()
     u32 *frame_buffer_with_game_map = (u32 *)malloc(sizeof(u32) * FB_NUMBER_OF_COLUMNS * FB_NUMBER_OF_ROWS);
 
     ShowWindow(window_handle, SW_SHOW);
-
+    const u32 color_map[9] = {0x00000000, 0xffffffff, 0x00ff0000, 0x00f00000, 0x000f0000,
+                              0x0000f000, 0x00000f00, 0x000000f0, 0x0000000f};
     // As the game map is static for now, it might be more efficient to draw the game map to framebuffer initially, and
     // do a memcpy of framebuffer at the start of each frame. Rules for the hardcoded game map. Map width and height
     // must be divisible by NUMBER_OF_COLUMNS and NUMBER_OF_ROWS. In this map (1D char array), a number is a walled zone
@@ -136,9 +169,36 @@ int main()
                                                                         "0              0"
                                                                         "0000000000000000";
 
-    // Color map (For walls).
-    const u32 color_map[9] = {0x00000000, 0xffffffff, 0x00ff0000, 0x00f00000, 0x000f0000,
-                              0x0000f000, 0x00000f00, 0x000000f0, 0x0000000f};
+    // Load wall textures (a image that has 6 wall textures placed horizontally next to each other).
+    struct TextureSheet wall_texture_sheet = {};
+
+    {
+        int wall_tex_width, wall_tex_height;
+        wall_texture_sheet.texture = stbi_load("assets/wall_textures.png", &wall_tex_width, &wall_tex_height, NULL, 3);
+        if (!wall_texture_sheet.texture)
+        {
+            printf("Failed to load wall texture.");
+
+            free(frame_buffer);
+            free(frame_buffer_with_game_map);
+
+            return 0;
+        }
+
+        wall_texture_sheet.width = wall_tex_width;
+        wall_texture_sheet.height = wall_tex_height;
+
+        wall_texture_sheet.num_textures = wall_tex_width / wall_tex_height;
+
+        wall_texture_sheet.num_components = 3;
+
+        printf("Wall texture width and height : %u %u\n", wall_texture_sheet.width, wall_texture_sheet.height);
+    }
+
+    // The individual wall textures are square. So, number of wall textures embedded into this single image is
+    // wall_tex_width / wall_tex_height.
+    // const u8 num_wall_textures = wall_tex_width / wall_tex_height;
+
     // Set a background color for entire FB.
     for (u32 i = 0; i < FB_NUMBER_OF_ROWS * FB_NUMBER_OF_COLUMNS; i++)
     {
@@ -161,6 +221,14 @@ int main()
             }
         }
     }
+
+    // NOTE : ONLY FOR TESTING PURPOSES.
+    draw_rectangle_with_texture_sheet(frame_buffer_with_game_map, &wall_texture_sheet, 0, 0, 0, 64, 64);
+    draw_rectangle_with_texture_sheet(frame_buffer_with_game_map, &wall_texture_sheet, 1, 64, 0, 64, 64);
+    draw_rectangle_with_texture_sheet(frame_buffer_with_game_map, &wall_texture_sheet, 2, 128, 0, 64, 64);
+    draw_rectangle_with_texture_sheet(frame_buffer_with_game_map, &wall_texture_sheet, 3, 192, 0, 64, 64);
+    draw_rectangle_with_texture_sheet(frame_buffer_with_game_map, &wall_texture_sheet, 4, 256, 0, 64, 64);
+    draw_rectangle_with_texture_sheet(frame_buffer_with_game_map, &wall_texture_sheet, 5, 312, 0, 64, 64);
 
     // FOV (Field of view)
     // Let the FOV be theta.
@@ -226,7 +294,7 @@ int main()
 
         for (f32 angle = -0.5f * player_fov; angle <= 0.5f * player_fov; angle += angle_increment_to_cast_512_rays)
         {
-            f32 distance = 0.0f;
+            u16 distance = 0.0f;
             u32 color = 0u;
 
             for (u16 c = 1u; c < IMAGE_NUMBER_OF_ROWS; c += 1)
@@ -243,12 +311,9 @@ int main()
                 if (map_look_at_x < MAP_NUMBER_OF_COLUMNS && map_look_at_y < MAP_NUMBER_OF_ROWS &&
                     game_map_value != ' ')
                 {
-                    distance = (IMAGE_NUMBER_OF_ROWS /
-                                (sqrt(pow(cos(player_angle + angle) * c, 2) + pow(sin(player_angle + angle) * c, 2)) *
-                                     cos(angle) +
-                                 0.0001f)) *
-                               MAP_NUMBER_OF_ROWS;
-                    distance = distance > IMAGE_NUMBER_OF_ROWS ? MAP_NUMBER_OF_ROWS : distance;
+                    // Here, the * MAP_NUMBER_OF_ROWS is basically the max height of a wall when you are right in front
+                    // of it.
+                    distance = (IMAGE_NUMBER_OF_ROWS / ((f32)c * cos(angle) + 0.0001f)) * MAP_NUMBER_OF_ROWS;
                     color = color_map[game_map_value - '0'];
                     break;
                 }
@@ -261,6 +326,7 @@ int main()
             // Each of 512 casted rays represent one pixel of 3D image horizontally.
             // When a obstacle has been hit, find the distance to player, find inverse, and move (inverse / 2) pixels up
             // and down from the center of 3D image. The color is the same as the obstacle color.
+            distance = distance > IMAGE_NUMBER_OF_ROWS ? IMAGE_NUMBER_OF_ROWS : distance;
             for (i16 h = -distance / 2; h < distance / 2; h += 1)
             {
                 frame_buffer[((IMAGE_NUMBER_OF_ROWS / 2) + h) * FB_NUMBER_OF_COLUMNS + ray_number +
@@ -292,6 +358,8 @@ int main()
 
     free(frame_buffer);
     free(frame_buffer_with_game_map);
+
+    stbi_image_free(wall_texture_sheet.texture);
 
     return 0;
 }
