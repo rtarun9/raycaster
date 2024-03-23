@@ -23,8 +23,6 @@
 #define IMAGE_NUMBER_OF_COLUMNS (FB_NUMBER_OF_COLUMNS / 2)
 #define IMAGE_NUMBER_OF_ROWS FB_NUMBER_OF_ROWS
 
-#define MAXIMUM_PIXEL_VALUE 255
-
 // Dimensions of the map.
 #define MAP_NUMBER_OF_COLUMNS 16
 #define MAP_NUMBER_OF_ROWS 16
@@ -45,44 +43,10 @@ void draw_rectangle(u32 *frame_buffer, const u32 color, const u16 x, const u16 y
 {
     for (u16 k = 0; k < rect_height; k++)
     {
+        u32 *frame_buffer_location_row_start = &frame_buffer[(y + k) * FB_NUMBER_OF_COLUMNS];
         for (u16 v = 0; v < rect_width; v++)
         {
-            frame_buffer[(y + k) * FB_NUMBER_OF_COLUMNS + v + x] = color;
-        }
-    }
-}
-
-// A similar function as previous, but takes wall texture and wall index as parameter.
-// The texture has many individual texture placed side by side, and texture index determines which individual texture is
-// being used. See assets/wall_texture.png to see example of texture to be called from this function.
-// NOTE : texture_width and height correspond to the entire texture, not for individual texture.
-// NOTE : This will only be used for viz purpose on the 2d image, so accuracy isn't needed a 100%.
-void draw_rectangle_with_texture_sheet(u32 *frame_buffer, struct TextureSheet *texture_sheet, const u8 texture_index,
-                                       const u16 x, const u16 y, const u16 rect_width, const u16 rect_height)
-{
-    // The final mul with texture_sheet->height keeps in mind that width and height of individual textures = height of
-    // texture sheet.
-    const u16 texture_width_offset = texture_index * texture_sheet->height;
-
-    // Rather than taking the average along x and y, just skip some pixels horizontally and vertically.
-    // Note that the texture sheet has square textures (equal height and width), which is why texture sheet height is
-    // used in some places where texture sheet's individual height would be used.
-    const u16 texture_x_axis_skip = texture_sheet->height / rect_width;
-    const u16 texture_y_axis_skip = texture_sheet->width / rect_height;
-
-    for (u16 k = 0; k < rect_height; k++)
-    {
-        for (u16 v = 0; v < rect_width; v++)
-        {
-            // In pixel format, R G B components are placed in that order.
-            const u8 *texture_red_component_address =
-                &texture_sheet->texture[(texture_width_offset + texture_x_axis_skip + v +
-                                         texture_sheet->width * (k + texture_y_axis_skip)) *
-                                        texture_sheet->num_components];
-
-            frame_buffer[(y + k) * FB_NUMBER_OF_COLUMNS + v + x] = *(texture_red_component_address) << 16 |
-                                                                   *(texture_red_component_address + 1) << 8 |
-                                                                   *(texture_red_component_address + 2);
+            *(frame_buffer_location_row_start + v + x) = color;
         }
     }
 }
@@ -92,6 +56,8 @@ void draw_rectangle_with_texture_sheet(u32 *frame_buffer, struct TextureSheet *t
 static i8 g_move_x = 0;
 static i8 g_move_y = 0;
 
+// g_player_angle is with respect to the x axis, clockwise is +ve.
+// Range of value is 0 to 360.
 static i16 g_player_angle = 0;
 
 int main()
@@ -115,7 +81,7 @@ int main()
     // Calculate required size of window rectangle based on client rectangle size.
     // Initially it will have client coords, but after AdjustWindowRect it will be the window coords.
     RECT window_rect = {0, 0, FB_NUMBER_OF_COLUMNS, FB_NUMBER_OF_ROWS};
-    printf("Client rect right :: %lu, Window rect bottom :: %lu\n", window_rect.right, window_rect.bottom);
+    printf("Client rect right :: %lu, Client rect bottom :: %lu\n", window_rect.right, window_rect.bottom);
 
     AdjustWindowRect(&window_rect, WS_OVERLAPPEDWINDOW, FALSE);
 
@@ -123,7 +89,8 @@ int main()
 
     const HWND window_handle =
         CreateWindowExA(0, window_class_name, "Raycaster", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                        window_rect.right, window_rect.bottom, NULL, NULL, GetModuleHandle(NULL), NULL);
+                        window_rect.right - window_rect.left, window_rect.bottom - window_rect.top, NULL, NULL,
+                        GetModuleHandle(NULL), NULL);
     if (window_handle)
     {
         printf("Created win32 window.\n");
@@ -154,8 +121,8 @@ int main()
     // As the game map is static for now, it might be more efficient to draw the game map to framebuffer initially, and
     // do a memcpy of framebuffer at the start of each frame. Rules for the hardcoded game map. Map width and height
     // must be divisible by NUMBER_OF_COLUMNS and NUMBER_OF_ROWS. In this map (1D char array), a number is a walled zone
-    // (the number is a index into color
-    // map). Empty entries are non-walls. Number will imply that visually a MAP_CELL_ENTRY_WIDTH x
+    // (the number is the 'texture index' in the texture sheet, a which is a list of 6 textures placed horizontally next
+    // to one another. map). Empty entries are non-walls. Number will imply that visually a MAP_CELL_ENTRY_WIDTH x
     // MAP_CELL_ENTRY_HEIGHT area will be non-walled.
     const u8 game_map[MAP_NUMBER_OF_ROWS * MAP_NUMBER_OF_COLUMNS + 1] = "0000003330200000"
                                                                         "1              0"
@@ -202,12 +169,11 @@ int main()
 
     // The individual wall textures are square. So, number of wall textures embedded into this single image is
     // wall_tex_width / wall_tex_height.
-    // const u8 num_wall_textures = wall_tex_width / wall_tex_height;
 
     // Set a background color for entire FB.
     for (u32 i = 0; i < FB_NUMBER_OF_ROWS * FB_NUMBER_OF_COLUMNS; i++)
     {
-        frame_buffer_with_game_map[i] = 0x000099cc;
+        frame_buffer_with_game_map[i] = 0x00001111;
     }
 
     // Create the game map.
@@ -215,15 +181,19 @@ int main()
     {
         for (u16 j = 0; j < MAP_NUMBER_OF_COLUMNS; j++)
         {
-            // If entry [i][j] of game_map is a 0, write black from i * MAP_CELL_ENTRY_WIDTH to i *
-            // MAP_CELL_ENTRY_WIDTH
-            // + 1 (and similarly for the height).
             const u8 game_map_value = game_map[i * MAP_NUMBER_OF_COLUMNS + j];
             if (game_map_value != ' ')
             {
-                draw_rectangle_with_texture_sheet(frame_buffer_with_game_map, &wall_texture_sheet, game_map_value,
-                                                  j * MAP_CELL_ENTRY_WIDTH, i * MAP_CELL_ENTRY_HEIGHT,
-                                                  MAP_CELL_ENTRY_WIDTH, MAP_CELL_ENTRY_HEIGHT);
+                // On the 2d image, just draw the top left pixel color.
+                const u8 *red_component_pixel_location =
+                    &wall_texture_sheet.texture[((game_map_value - '0') * wall_texture_sheet.height) *
+                                                wall_texture_sheet.num_components];
+
+                const u32 color = *(red_component_pixel_location) << 16u | *(red_component_pixel_location + 1) << 8u |
+                                  *(red_component_pixel_location + 2);
+
+                draw_rectangle(frame_buffer_with_game_map, color, j * MAP_CELL_ENTRY_WIDTH, i * MAP_CELL_ENTRY_HEIGHT,
+                               MAP_CELL_ENTRY_WIDTH, MAP_CELL_ENTRY_HEIGHT);
             }
         }
     }
@@ -231,7 +201,9 @@ int main()
     // FOV (Field of view)
     // Let the FOV be theta.
     // Then, we consider that the player can see from -0.5f * theta + player_angle, 0.5f * theta + player_angle.
-    const f32 player_fov = degree_to_radians(45.0f);
+
+    // Note that ALL angles will be in degrees, and converted to radians when requied.
+    const f32 player_fov = 45.0f;
 
     // Values of player position x and y.
     // These values are tied to image coordinates.
@@ -241,7 +213,7 @@ int main()
     bool close_window = BOOL_FALSE;
     while (close_window != BOOL_TRUE)
     {
-        printf("Begin of frame.\n");
+        // printf("Begin of frame.\n");
         memcpy(frame_buffer, frame_buffer_with_game_map, sizeof(u32) * FB_NUMBER_OF_ROWS * FB_NUMBER_OF_COLUMNS);
 
         MSG message = {};
@@ -256,6 +228,7 @@ int main()
             close_window = BOOL_TRUE;
         }
 
+        // Cap value of player angle from 0 to 360.
         if (g_player_angle < 0)
         {
             g_player_angle = 360 + g_player_angle;
@@ -265,18 +238,18 @@ int main()
         {
             g_player_angle = g_player_angle - 360;
         }
-        printf("%u ", g_player_angle);
 
         LARGE_INTEGER frame_start_time = {};
         LARGE_INTEGER frame_end_time = {};
 
         QueryPerformanceCounter(&frame_start_time);
 
-        player_x = (player_x + g_move_x) % IMAGE_NUMBER_OF_COLUMNS;
-        player_y = (player_y + g_move_y) % IMAGE_NUMBER_OF_ROWS;
+        // NOTE: No checks are done to see if player is out of bounds.
+        player_x = player_x + g_move_x;
+        player_y = player_y + g_move_y;
 
         // player_angle is the angle (with respect to the x axis) that the player is looking at.
-        const f32 player_angle = degree_to_radians(g_player_angle);
+        const f32 player_angle = g_player_angle;
 
         // player_a : The angle the player is looking at, with respect to the x axis.
         // Consider the following triangle.
@@ -304,17 +277,22 @@ int main()
         for (f32 angle = -0.5f * player_fov; angle <= 0.5f * player_fov; angle += angle_increment_to_cast_512_rays)
         {
             const f32 player_and_ray_angle_sum = player_angle + angle;
+
             u16 distance = 0.0f;
 
-            // The 'x' coordinate of the texture sheet (i.e horizontal axis) is based on look_at_x value.
-            // The 'y' coordinates of the texture sheet (i.e vertical axis) will be determined based on distance.
-            u16 texture_sheet_horizontal_coordinate = 0;
+            // Texture coord will either be 'delta x' or 'delta y' based on a few factors.
+            // Basically, the wall in its absolute has a position parallel to x and y axis in a sense.
+            // if the look_at_x value % map cell dimensions is basically 0, then use look at y to determine texture
+            // coord and vice versa.
+            // https://github.com/ssloy/tinyraycaster/wiki/Part-2:-texturing-the-walls#step-10-rudimentary-use-of-textures
+            // explains the methodology in better terms.
+            u16 texture_coord = 0;
 
             for (u16 c = 1u; c < IMAGE_NUMBER_OF_ROWS; c += 1)
             {
 
-                const u16 look_at_x = (u16)(cos(player_and_ray_angle_sum) * c + player_x);
-                const u16 look_at_y = (u16)(sin(player_and_ray_angle_sum) * c + player_y);
+                const u16 look_at_x = (u16)(cos(degree_to_radians(player_and_ray_angle_sum)) * c + player_x);
+                const u16 look_at_y = (u16)(sin(degree_to_radians(player_and_ray_angle_sum)) * c + player_y);
 
                 // If the 'ray' hits a wall, break out of the loop.
                 // For that, conversion from fb coordinate to map coordinate is required.
@@ -327,33 +305,31 @@ int main()
                 {
                     // Here, the * MAP_NUMBER_OF_ROWS is basically the max height of a wall when you are right in front
                     // of it.
-                    distance = (IMAGE_NUMBER_OF_ROWS / ((f32)c * cos(angle) + 0.0001f)) * MAP_NUMBER_OF_ROWS;
+                    distance = (IMAGE_NUMBER_OF_ROWS / ((f32)c * cos(degree_to_radians(angle)) + 0.0001f)) *
+                               MAP_NUMBER_OF_ROWS;
 
                     // look_at_x and y are framebuffer coordinates.
-                    // the texture sheet horizontal coordinate is essentially the fractional part when subtracting
-                    // (i) look at x with the multiple of MAP_CELL_ENTRY_WIDTH that is just below look_at_x. (when the
-                    // player is looking at up or down direction). (ii) look at y with the multiple of
-                    // MAP_CELL_ENTRY_HEIGHT that is just below look_at_y. (when the player is looking at left or right
-                    // direction). Doing so will result in a value in the range of 0, MAP_CELL_ENTRY_WIDTH - 1 or 0,
-                    // MAP_CELL_ENTRY_HEIGHT - 1.
-                    // These values will be equal for the most part, and that is a assumption I am taking.
+                    f32 delta_x = (look_at_x % MAP_CELL_ENTRY_WIDTH) / (f32)(MAP_CELL_ENTRY_WIDTH - 1);
+                    f32 delta_y = (look_at_y % MAP_CELL_ENTRY_WIDTH) / (f32)(MAP_CELL_ENTRY_WIDTH - 1);
+                    // Because of rounding issues, the calculation for delta_y > delta_x is not direct and requires some
+                    // extra work.
+                    // The computation is to decide which of delta_y and delta_x is closer to a integer number (i.e 0
+                    // fractional part).
 
+                    // I.e getting the fractional part for delta x and y.
+                    delta_x = delta_x - floor(delta_x);
+                    delta_y = delta_y - floor(delta_y);
+
+                    if (delta_y > delta_x)
                     {
-                        texture_sheet_horizontal_coordinate =
-                            (look_at_y - (look_at_y / MAP_CELL_ENTRY_WIDTH) * MAP_CELL_ENTRY_WIDTH) *
-                            (wall_texture_sheet.height / MAP_CELL_ENTRY_WIDTH);
+                        texture_coord = (u16)(delta_y * wall_texture_sheet.height) +
+                                        ((game_map_value - '0') * wall_texture_sheet.height);
                     }
-
-                    // If dot product of vertical axis and look at is >= 0.0f, player is looking at the UP.
-                    // If dot product of -vertical axis and look at is >= 0.0f, player is looking at the DOWN.
-                    if (abs(look_at_x - player_x) <= abs(look_at_y - player_y))
+                    else
                     {
-                        texture_sheet_horizontal_coordinate =
-                            (look_at_x - (look_at_x / MAP_CELL_ENTRY_WIDTH) * MAP_CELL_ENTRY_WIDTH) *
-                            (wall_texture_sheet.height / MAP_CELL_ENTRY_WIDTH);
+                        texture_coord = (u16)(delta_x * wall_texture_sheet.height) +
+                                        ((game_map_value - '0') * wall_texture_sheet.height);
                     }
-
-                    texture_sheet_horizontal_coordinate += (wall_texture_sheet.height * (game_map_value - '0'));
                     break;
                 }
 
@@ -371,12 +347,11 @@ int main()
             // The texture must fill there region from a height point of view.
             // So, a 0.. distance range gets mapped into 0..texture height.
             u16 texture_height_value = 0; // Assuming 0, 0 to be top left.
+
             for (i16 h = -distance / 2; h < distance / 2; h += 1)
             {
-
                 const u8 *red_component_pixel_location =
-                    &wall_texture_sheet.texture[(texture_sheet_horizontal_coordinate +
-                                                 texture_height_value * wall_texture_sheet.width) *
+                    &wall_texture_sheet.texture[(texture_coord + texture_height_value * wall_texture_sheet.width) *
                                                 wall_texture_sheet.num_components];
 
                 frame_buffer[((IMAGE_NUMBER_OF_ROWS / 2) + h) * FB_NUMBER_OF_COLUMNS + ray_number +
@@ -396,7 +371,7 @@ int main()
 
         QueryPerformanceCounter(&frame_end_time);
 
-        printf("Elapsed number of ticks :: %lld\n", frame_end_time.QuadPart - frame_start_time.QuadPart);
+        // printf("Elapsed number of ticks :: %lld\n", frame_end_time.QuadPart - frame_start_time.QuadPart);
 
         const HDC window_device_context = GetDC(window_handle);
 
@@ -404,7 +379,7 @@ int main()
         SetDIBitsToDevice(window_device_context, 0, 0, FB_NUMBER_OF_COLUMNS, FB_NUMBER_OF_ROWS, 0, 0, 0,
                           FB_NUMBER_OF_ROWS, (BYTE *)frame_buffer, &bitmap_info, DIB_RGB_COLORS);
 
-        printf("End of frame.\n");
+        // printf("End of frame.\n");
 
         g_move_x = 0;
         g_move_y = 0;
@@ -425,29 +400,29 @@ LRESULT CALLBACK window_proc(HWND window_handle, UINT message, WPARAM wparam, LP
     case WM_KEYDOWN:
         if (wparam == 0x57) // W
         {
-            g_move_y = -1;
+            g_move_y = -2;
         }
         else if (wparam == 0x53) // S
         {
-            g_move_y = 1;
+            g_move_y = 2;
         }
 
         if (wparam == 0x41) // A
         {
-            g_move_x = -1;
+            g_move_x = -2;
         }
         else if (wparam == 0x44) // D
         {
-            g_move_x = 1;
+            g_move_x = 2;
         }
 
         if (wparam == VK_LEFT)
         {
-            g_player_angle -= 2;
+            g_player_angle -= 3;
         }
         else if (wparam == VK_RIGHT)
         {
-            g_player_angle += 2;
+            g_player_angle += 3;
         }
 
         if (wparam == VK_ESCAPE)
